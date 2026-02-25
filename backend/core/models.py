@@ -1,4 +1,6 @@
 from django.contrib.postgres.fields import ArrayField
+from django.core.exceptions import ValidationError
+from django.core.validators import MaxValueValidator, MinValueValidator
 from django.db import models
 
 
@@ -24,6 +26,8 @@ class BlogPost(models.Model):
 
 
 class ContactSubmission(models.Model):
+    ALLOWED_TYPES = {"contact", "trip_planner", "quiz"}
+
     id = models.BigAutoField(primary_key=True)
     type = models.TextField()
     name = models.TextField()
@@ -35,6 +39,11 @@ class ContactSubmission(models.Model):
     class Meta:
         managed = False
         db_table = "contact_submissions"
+
+    def clean(self):
+        super().clean()
+        if self.type not in self.ALLOWED_TYPES:
+            raise ValidationError({"type": f"Invalid submission type '{self.type}'."})
 
 
 class Destination(models.Model):
@@ -90,6 +99,25 @@ class SeoMeta(models.Model):
 
 
 class SiteSetting(models.Model):
+    REQUIRED_STRING_KEYS = {
+        "site_name",
+        "tagline",
+        "phone",
+        "phone_raw",
+        "email",
+        "address",
+        "business_hours",
+        "footer_text",
+        "copyright_text",
+        "hero_image",
+        "hero_subtitle",
+        "hero_heading",
+        "hero_text",
+        "cta_image",
+        "cta_heading",
+        "cta_text",
+    }
+
     id = models.BigAutoField(primary_key=True)
     key = models.TextField(unique=True)
     value = models.JSONField(default=str, blank=True)
@@ -100,12 +128,40 @@ class SiteSetting(models.Model):
         managed = False
         db_table = "site_settings"
 
+    def clean(self):
+        super().clean()
+
+        if self.key in self.REQUIRED_STRING_KEYS and not isinstance(self.value, str):
+            raise ValidationError({"value": f"'{self.key}' must be a string value."})
+
+        if self.key == "footer_links":
+            self._validate_footer_links()
+
+    def _validate_footer_links(self):
+        if not isinstance(self.value, dict):
+            raise ValidationError({"value": "'footer_links' must be an object of link groups."})
+
+        for group_name, links in self.value.items():
+            if not isinstance(group_name, str) or not group_name.strip():
+                raise ValidationError({"value": "Each footer link group must have a non-empty string name."})
+            if not isinstance(links, list):
+                raise ValidationError({"value": f"Footer links group '{group_name}' must be a list."})
+            for link in links:
+                if not isinstance(link, dict):
+                    raise ValidationError({"value": f"Footer links in '{group_name}' must be objects."})
+                label = link.get("label")
+                href = link.get("href")
+                if not isinstance(label, str) or not label.strip():
+                    raise ValidationError({"value": f"Footer link in '{group_name}' is missing a valid 'label'."})
+                if not isinstance(href, str) or not href.strip():
+                    raise ValidationError({"value": f"Footer link in '{group_name}' is missing a valid 'href'."})
+
 
 class Testimonial(models.Model):
     id = models.BigAutoField(primary_key=True)
     name = models.TextField()
     location = models.TextField(blank=True, default="")
-    rating = models.IntegerField(default=5)
+    rating = models.IntegerField(default=5, validators=[MinValueValidator(1), MaxValueValidator(5)])
     text = models.TextField(blank=True, default="")
     tour = models.TextField(null=True, blank=True)
     avatar = models.TextField(null=True, blank=True)
@@ -141,6 +197,11 @@ class Tour(models.Model):
     class Meta:
         managed = False
         db_table = "tours"
+
+    def clean(self):
+        super().clean()
+        if self.category and not TravelStyle.objects.filter(slug=self.category).exists():
+            raise ValidationError({"category": "Category must match an existing travel style slug."})
 
 
 class TourDestination(models.Model):
