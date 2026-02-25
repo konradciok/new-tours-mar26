@@ -4,6 +4,7 @@ from unittest.mock import MagicMock, call, patch
 
 import django
 from unittest import TestCase
+from django.contrib.admin.sites import AdminSite
 from django.core.exceptions import ValidationError
 from django.core.management import call_command
 from django.core.management.base import CommandError
@@ -11,7 +12,9 @@ from django.core.management.base import CommandError
 os.environ.setdefault("DJANGO_SETTINGS_MODULE", "config.settings")
 django.setup()
 
-from core.models import ContactSubmission, SiteSetting, Testimonial, Tour
+from core.admin import BlogPostAdmin, ContactSubmissionAdmin, TourAdmin
+from core.db_sanity import check_table_select_smoke, evaluate_db_sanity
+from core.models import BlogPost, ContactSubmission, SiteSetting, Testimonial, Tour
 from core.tour_destinations import list_destination_ids_for_tour, replace_tour_destinations
 from core.verification import REQUIRED_SEO_PATHS, REQUIRED_SITE_SETTING_KEYS, get_missing_frontend_read_requirements
 
@@ -159,3 +162,117 @@ class FrontendReadinessVerificationTests(TestCase):
         call_command("validate_frontend_readiness", stdout=output)
 
         self.assertIn("Frontend read requirements are complete.", output.getvalue())
+
+
+class AdminWorkflowTests(TestCase):
+    @patch("core.admin.replace_tour_destinations")
+    @patch("core.admin.admin.ModelAdmin.save_model")
+    def test_tour_admin_save_model_syncs_destinations(self, base_save_model, replace_destinations):
+        tour_admin = TourAdmin(Tour, AdminSite())
+        request = MagicMock()
+        obj = MagicMock()
+        obj.id = 42
+
+        destination_a = MagicMock()
+        destination_a.id = 7
+        destination_b = MagicMock()
+        destination_b.id = 11
+        form = MagicMock()
+        form.cleaned_data = {"destinations": [destination_a, destination_b]}
+
+        tour_admin.save_model(request, obj, form, change=True)
+
+        base_save_model.assert_called_once_with(request, obj, form, True)
+        replace_destinations.assert_called_once_with(42, [7, 11])
+
+    def test_contact_submission_admin_is_read_only(self):
+        admin_instance = ContactSubmissionAdmin(ContactSubmission, AdminSite())
+        request = MagicMock()
+
+        self.assertFalse(admin_instance.has_add_permission(request))
+        self.assertFalse(admin_instance.has_change_permission(request))
+        self.assertFalse(admin_instance.has_delete_permission(request))
+
+    @patch("core.admin.timezone.now")
+    def test_blog_publish_action_sets_published_at(self, timezone_now):
+        timezone_now.return_value = "NOW"
+        admin_instance = BlogPostAdmin(BlogPost, AdminSite())
+        request = MagicMock()
+        queryset = MagicMock()
+        queryset.update.return_value = 3
+        admin_instance.message_user = MagicMock()
+
+        admin_instance.publish_posts(request, queryset)
+
+        queryset.update.assert_called_once_with(published=True, published_at="NOW")
+        admin_instance.message_user.assert_called_once_with(request, "Published 3 blog post(s).")
+
+    def test_blog_unpublish_action_clears_published_at(self):
+        admin_instance = BlogPostAdmin(BlogPost, AdminSite())
+        request = MagicMock()
+        queryset = MagicMock()
+        queryset.update.return_value = 2
+        admin_instance.message_user = MagicMock()
+
+        admin_instance.unpublish_posts(request, queryset)
+
+        queryset.update.assert_called_once_with(published=False, published_at=None)
+        admin_instance.message_user.assert_called_once_with(request, "Unpublished 2 blog post(s).")
+
+
+class DBSanityTests(TestCase):
+    def test_evaluate_db_sanity_reports_missing_items(self):
+        results = evaluate_db_sanity(
+            existing_tables={"tours"},
+            existing_rpcs=set(),
+            policy_tables={"tours"},
+            smoke_failures={"faq": "permission denied"},
+        )
+
+        self.assertIn("destinations", results["missing_tables"])
+        self.assertIn("increment_blog_view", results["missing_rpcs"])
+        self.assertIn("destinations", results["tables_without_policies"])
+        self.assertEqual(results["smoke_failures"], {"faq": "permission denied"})
+
+    @patch("core.db_sanity.connection.cursor")
+    def test_check_table_select_smoke_reports_table_errors(self, cursor_factory):
+        ok_cursor_cm = MagicMock()
+        ok_cursor = MagicMock()
+        ok_cursor_cm.__enter__.return_value = ok_cursor
+
+        failing_cursor_cm = MagicMock()
+        failing_cursor = MagicMock()
+        failing_cursor.execute.side_effect = RuntimeError("relation missing")
+        failing_cursor_cm.__enter__.return_value = failing_cursor
+
+        cursor_factory.side_effect = [ok_cursor_cm, failing_cursor_cm]
+
+        failures = check_table_select_smoke(["tours", "faq"])
+
+        self.assertEqual(failures, {"faq": "relation missing"})
+
+    @patch("core.management.commands.validate_db_sanity.run_db_sanity_checks")
+    def test_db_sanity_command_fails_when_checks_fail(self, run_checks):
+        run_checks.return_value = {
+            "missing_tables": ["faq"],
+            "missing_rpcs": [],
+            "tables_without_policies": [],
+            "smoke_failures": {},
+        }
+
+        with self.assertRaises(CommandError):
+            call_command("validate_db_sanity")
+
+    @patch("core.management.commands.validate_db_sanity.run_db_sanity_checks")
+    def test_db_sanity_command_succeeds_when_checks_pass(self, run_checks):
+        run_checks.return_value = {
+            "missing_tables": [],
+            "missing_rpcs": [],
+            "tables_without_policies": [],
+            "smoke_failures": {},
+        }
+        output = StringIO()
+
+        call_command("validate_db_sanity", stdout=output)
+
+        self.assertIn("DB sanity checks passed.", output.getvalue())
