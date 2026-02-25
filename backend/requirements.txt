@@ -1,0 +1,6 @@
+django
+django-unfold
+psycopg[binary]
+python-decouple
+gunicorn
+whitenoise
