@@ -1,15 +1,19 @@
 import os
+from io import StringIO
 from unittest.mock import MagicMock, call, patch
 
 import django
 from unittest import TestCase
 from django.core.exceptions import ValidationError
+from django.core.management import call_command
+from django.core.management.base import CommandError
 
 os.environ.setdefault("DJANGO_SETTINGS_MODULE", "config.settings")
 django.setup()
 
 from core.models import ContactSubmission, SiteSetting, Testimonial, Tour
 from core.tour_destinations import list_destination_ids_for_tour, replace_tour_destinations
+from core.verification import REQUIRED_SEO_PATHS, REQUIRED_SITE_SETTING_KEYS, get_missing_frontend_read_requirements
 
 
 class TourDestinationHelpersTests(TestCase):
@@ -115,3 +119,43 @@ class ModelValidationTests(TestCase):
         )
 
         setting.clean()
+
+
+class FrontendReadinessVerificationTests(TestCase):
+    @patch("core.verification.SeoMeta.objects.values_list")
+    @patch("core.verification.SiteSetting.objects.values_list")
+    def test_reports_missing_paths_and_keys(self, site_values_list, seo_values_list):
+        seo_values_list.return_value = ["/", "/tours", "/blog"]
+        site_values_list.return_value = ["site_name", "tagline", "email"]
+
+        missing_paths, missing_keys = get_missing_frontend_read_requirements()
+
+        self.assertIn("/destinations", missing_paths)
+        self.assertIn("phone", missing_keys)
+
+    @patch("core.verification.SeoMeta.objects.values_list")
+    @patch("core.verification.SiteSetting.objects.values_list")
+    def test_reports_no_missing_items_when_complete(self, site_values_list, seo_values_list):
+        seo_values_list.return_value = REQUIRED_SEO_PATHS
+        site_values_list.return_value = REQUIRED_SITE_SETTING_KEYS
+
+        missing_paths, missing_keys = get_missing_frontend_read_requirements()
+
+        self.assertEqual(missing_paths, [])
+        self.assertEqual(missing_keys, [])
+
+    @patch("core.management.commands.validate_frontend_readiness.get_missing_frontend_read_requirements")
+    def test_management_command_fails_on_missing_items(self, missing_requirements_mock):
+        missing_requirements_mock.return_value = (["/about"], ["site_name"])
+
+        with self.assertRaises(CommandError):
+            call_command("validate_frontend_readiness")
+
+    @patch("core.management.commands.validate_frontend_readiness.get_missing_frontend_read_requirements")
+    def test_management_command_succeeds_when_complete(self, missing_requirements_mock):
+        missing_requirements_mock.return_value = ([], [])
+        output = StringIO()
+
+        call_command("validate_frontend_readiness", stdout=output)
+
+        self.assertIn("Frontend read requirements are complete.", output.getvalue())
