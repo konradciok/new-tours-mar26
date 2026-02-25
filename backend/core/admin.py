@@ -1,8 +1,19 @@
 from django import forms
 from django.contrib import admin
+from django.utils import timezone
 from django.utils.html import format_html_join
 
-from core.models import Destination, Tour
+from core.models import (
+    BlogPost,
+    ContactSubmission,
+    Destination,
+    FAQ,
+    SeoMeta,
+    SiteSetting,
+    Testimonial,
+    Tour,
+    TravelStyle,
+)
 from core.tour_destinations import list_destination_ids_for_tour, replace_tour_destinations
 
 
@@ -72,3 +83,79 @@ class TourAdmin(admin.ModelAdmin):
             return "No destinations linked."
 
         return format_html_join("", "<div>{} <small>({})</small></div>", ((name, slug) for name, slug in destinations))
+
+
+@admin.register(Destination)
+class DestinationAdmin(admin.ModelAdmin):
+    list_display = ("name", "slug", "country", "region", "featured")
+    search_fields = ("name", "slug", "country", "region")
+    list_filter = ("featured", "country", "region")
+
+
+@admin.register(BlogPost)
+class BlogPostAdmin(admin.ModelAdmin):
+    list_display = ("title", "slug", "author", "published", "published_at", "views", "updated_at")
+    search_fields = ("title", "slug", "author", "excerpt")
+    list_filter = ("published", "created_at", "updated_at")
+    actions = ("publish_posts", "unpublish_posts")
+
+    @admin.action(description="Publish selected blog posts")
+    def publish_posts(self, request, queryset):
+        count = queryset.update(published=True, published_at=timezone.now())
+        self.message_user(request, f"Published {count} blog post(s).")
+
+    @admin.action(description="Unpublish selected blog posts")
+    def unpublish_posts(self, request, queryset):
+        count = queryset.update(published=False, published_at=None)
+        self.message_user(request, f"Unpublished {count} blog post(s).")
+
+
+@admin.register(TravelStyle)
+class TravelStyleAdmin(admin.ModelAdmin):
+    list_display = ("name", "slug", "icon")
+    search_fields = ("name", "slug", "description", "icon")
+
+
+@admin.register(FAQ)
+class FAQAdmin(admin.ModelAdmin):
+    list_display = ("question", "category", "sort_order")
+    search_fields = ("question", "answer", "category")
+    list_filter = ("category",)
+    ordering = ("sort_order", "id")
+
+
+@admin.register(Testimonial)
+class TestimonialAdmin(admin.ModelAdmin):
+    list_display = ("name", "location", "tour", "rating", "date")
+    search_fields = ("name", "location", "tour", "text")
+    list_filter = ("rating", "date")
+
+
+@admin.register(SeoMeta)
+class SeoMetaAdmin(admin.ModelAdmin):
+    list_display = ("page_path", "title", "no_index", "updated_at")
+    search_fields = ("page_path", "title", "description")
+    list_filter = ("no_index",)
+
+
+@admin.register(SiteSetting)
+class SiteSettingAdmin(admin.ModelAdmin):
+    list_display = ("key", "updated_at")
+    search_fields = ("key",)
+
+
+@admin.register(ContactSubmission)
+class ContactSubmissionAdmin(admin.ModelAdmin):
+    list_display = ("type", "name", "email", "phone", "created_at")
+    search_fields = ("type", "name", "email", "phone")
+    list_filter = ("type", "created_at")
+    readonly_fields = ("type", "name", "email", "phone", "payload", "created_at")
+
+    def has_add_permission(self, request):
+        return False
+
+    def has_change_permission(self, request, obj=None):
+        return False
+
+    def has_delete_permission(self, request, obj=None):
+        return False
