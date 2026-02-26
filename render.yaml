@@ -1,0 +1,62 @@
+services:
+  - type: static
+    name: tours-frontend
+    rootDir: .
+    plan: free
+    buildCommand: >
+      if [ -f frontend/package.json ]; then
+        cd frontend && npm ci && npm run build;
+      else
+        if [ -z "${GITHUB_TOKEN:-}" ]; then
+          echo "GITHUB_TOKEN is required to pull private frontend submodule" && exit 1;
+        fi;
+        git config -f .gitmodules submodule.frontend.url "https://${GITHUB_TOKEN}@github.com/konradciok/heritage-travels.git";
+        git config -f .gitmodules submodule.backend.url "https://github.com/konradciok/new-tours-mar26-backend.git";
+        git submodule sync --recursive;
+        git submodule update --init --recursive;
+        cd frontend && npm ci && npm run build;
+      fi
+    staticPublishPath: frontend/dist
+    pullRequestPreviewsEnabled: false
+    routes:
+      - type: rewrite
+        source: /*
+        destination: /index.html
+    envVars:
+      - key: VITE_SUPABASE_URL
+        sync: false
+      - key: VITE_SUPABASE_ANON_KEY
+        sync: false
+      - key: VITE_APP_ENV
+        value: production
+      - key: GITHUB_TOKEN
+        sync: false
+
+  - type: web
+    name: tours-backend
+    runtime: python
+    rootDir: backend/backend
+    plan: free
+    buildCommand: pip install -r requirements.txt && python manage.py collectstatic --noinput
+    startCommand: gunicorn config.wsgi:application --bind 0.0.0.0:$PORT
+    healthCheckPath: /admin/login/
+    autoDeploy: true
+    envVars:
+      - key: SECRET_KEY
+        sync: false
+      - key: DEBUG
+        value: "false"
+      - key: ALLOWED_HOSTS
+        sync: false
+      - key: CSRF_TRUSTED_ORIGINS
+        sync: false
+      - key: DB_HOST
+        sync: false
+      - key: DB_PORT
+        value: "5432"
+      - key: DB_NAME
+        sync: false
+      - key: DB_USER
+        sync: false
+      - key: DB_PASSWORD
+        sync: false
